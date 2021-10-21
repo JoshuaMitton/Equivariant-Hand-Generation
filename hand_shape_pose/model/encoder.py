@@ -80,20 +80,28 @@ class E2ResidualBlock(e2nn.EquivariantModule):
         out = self.relu2(out)
         return out
     
+    def evaluate_output_shape(self, input_shape):
+        assert len(input_shape) == 4
+        assert input_shape[1] == self.in_type.size
+        if self.shortcut is not None:
+            return self.shortcut.evaluate_output_shape(input_shape)
+        else:
+            return input_shape
+    
 class E2Encoder(torch.nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self):
         super(E2Encoder, self).__init__()
         self.r2_act = gspaces.Rot2dOnR2(N=8)
-        self.type_in  = e2nn.FieldType(self.r2_act,  in_channels*[self.r2_act.trivial_repr])
-        self.type_out = e2nn.FieldType(self.r2_act, out_channels*[self.r2_act.regular_repr])
+        self.type_in  = e2nn.FieldType(self.r2_act,  3*[self.r2_act.trivial_repr])
+        self.type_out = e2nn.FieldType(self.r2_act, 8*[self.r2_act.regular_repr])
 
         self.conv1 = e2nn.R2Conv(self.type_in, self.type_out, kernel_size=5, padding=2)
         self.bn1 = e2nn.InnerBatchNorm(self.type_out)
         self.relu = e2nn.ReLU(self.type_out)
-        self.block1 = E2ResidualBlock(in_channels=self.type_out, out_channels=self.type_out)
-        self.block2 = E2ResidualBlock(in_channels=self.type_out, out_channels=self.type_out)
-        self.block3 = E2ResidualBlock(in_channels=self.type_out, out_channels=self.type_out)
-        self.block4 = E2ResidualBlock(in_channels=self.type_out, out_channels=self.type_out)
+        self.block1 = E2ResidualBlock(type_in=self.type_out, type_out=self.type_out)
+        self.block2 = E2ResidualBlock(type_in=self.type_out, type_out=self.type_out)
+        self.block3 = E2ResidualBlock(type_in=self.type_out, type_out=self.type_out)
+        self.block4 = E2ResidualBlock(type_in=self.type_out, type_out=self.type_out)
         self.pool = self.maxpool = e2nn.PointwiseMaxPool(self.type_out, 2)
         self.fc1 = torch.nn.Linear(64 * 16 * 16, 8192)
         self.fc2 = torch.nn.Linear(8192, 8192)
@@ -109,7 +117,7 @@ class E2Encoder(torch.nn.Module):
         x = self.pool(self.block4(x))
         x = x.tensor
         x = torch.flatten(x, 1) # flatten all dimensions except batch
-        print(f'x shape {x.shape}')
+#         print(f'x shape {x.shape}')
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = F.relu(self.fc3(x))
