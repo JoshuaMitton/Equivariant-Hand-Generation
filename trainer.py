@@ -34,14 +34,14 @@ np.random.seed(42)
 from hand_shape_pose.model.shape_pose_network import ShapePoseNetwork
 # from hand_shape_pose.model.PointTransformer import PointTransformer, MLP
 # from hand_shape_pose.model.TransformerConv import TransformerConv
-# from hand_shape_pose.model.GATModel import GATConvModel
-from hand_shape_pose.model.encoder import Encoder, E2Encoder
+from hand_shape_pose.model.GATModel import GATConvModel
+from hand_shape_pose.model.encoder import Encoder, E2Encoder, E2EncoderE2
 from hand_shape_pose.data.build import build_dataset
 
 import emlp.nn.pytorch as emlpnn
 from emlp.nn.pytorch import EMLPBlock, Linear
 from emlp.reps import Scalar,V,T,Rep
-from emlp.groups import SO
+from emlp.groups import SO, S
 import logging
 
 # Folder permissions for cluster.
@@ -49,44 +49,8 @@ os.umask(0o002)
 # H5 File bug over network file system.
 os.environ['HDF5_USE_FILE_LOCKING'] = 'FALSE'
 
-# class EMLP(nn.Module):
-#         """ Equivariant MultiLayer Perceptron. 
-#             If the input ch argument is an int, uses the hands off uniform_rep heuristic.
-#             If the ch argument is a representation, uses this representation for the hidden layers.
-#             Individual layer representations can be set explicitly by using a list of ints or a list of
-#             representations, rather than use the same for each hidden layer.
-#             Args:
-#                 rep_in (Rep): input representation
-#                 rep_out (Rep): output representation
-#                 group (Group): symmetry group
-#                 ch (int or list[int] or Rep or list[Rep]): number of channels in the hidden layers
-#                 num_layers (int): number of hidden layers
-#             Returns:
-#                 Module: the EMLP objax module."""
-#         def __init__(self,rep_in,rep_out,group,ch=384,num_layers=3):
-#             super().__init__()
-#             logging.info("Initing EMLP (PyTorch)")
-#             self.rep_in =rep_in(group)
-#             self.rep_out = rep_out(group)
-
-#             self.G=group
-#             # Parse ch as a single int, a sequence of ints, a single Rep, a sequence of Reps
-# #             if isinstance(ch,int): middle_layers = num_layers*[ch*Scalar(self.G)+ch*V(self.G)+ch*V(self.G)**2]
-#             if isinstance(ch,int): middle_layers = [uniform_rep(ch,group) for _ in range(num_layers)]
-#             elif isinstance(ch,Rep): middle_layers = num_layers*[ch(group)]
-#             else: middle_layers = [(c(group) if isinstance(c,Rep) else uniform_rep(c,group)) for c in ch]
-#             #assert all((not rep.G is None) for rep in middle_layers[0].reps)
-#             reps = [self.rep_in]+middle_layers
-#             #logging.info(f"Reps: {reps}")
-#             self.network = nn.Sequential(
-#                 *[EMLPBlock(rin,rout) for rin,rout in zip(reps,reps[1:])],
-#                 Linear(reps[-1],self.rep_out)
-#             )
-#         def forward(self,x):
-#             return self.network(x)
 
 def test(encoder, reshaper, mesh_decoder, data_loader_val, criterion, csvlog, args):
-# def test(encoder, lin_projector, mesh_decoder, data_loader_val, chamfer_dist, csvlog, args):
     encoder.eval()
     reshaper.eval()
     mesh_decoder.eval()
@@ -115,6 +79,14 @@ def test(encoder, reshaper, mesh_decoder, data_loader_val, criterion, csvlog, ar
 
         ## Get some initial point estimate for point transformer layers
         points = reshaper(latent)
+        
+        if args.reshaper_type == 'EMLP':
+            points_2d = points[:,:636]
+            points_2d = points_2d.view(-1,318,2)
+            points_1d = points[:,636:]
+            points_1d = points_1d.view(-1,318,1)
+            points_3d = torch.cat((points_2d,points_1d), dim=-1)
+            points = points_3d.view(-1,954)
 
         ## Mesh decoder
         mesh = mesh_decoder(points)
@@ -127,7 +99,6 @@ def test(encoder, reshaper, mesh_decoder, data_loader_val, criterion, csvlog, ar
     return tot_loss
 
 def test_plot(encoder, reshaper, mesh_decoder, batch, criterion, csvlog, epoch, args):
-# def test(encoder, lin_projector, mesh_decoder, data_loader_val, chamfer_dist, csvlog, args):
     encoder.eval()
     reshaper.eval()
     mesh_decoder.eval()
@@ -135,11 +106,7 @@ def test_plot(encoder, reshaper, mesh_decoder, batch, criterion, csvlog, epoch, 
 
     ## Get data
     images, cam_params, bboxes, pose_roots, pose_scales, mesh_pts_gt, mesh_normal_gt, mesh_tri_idx, image_ids = batch
-#     print(images)
     images = torch.unsqueeze(images.permute(2,0,1).float().to(args.device),axis=0)
-#     print(mesh_pts_gt)
-#     mesh_pts_gt = torch.from_numpy(mesh_pts_gt).float().to(args.device)
-#     print(mesh_pts_gt)
 
     if args.dataset == 'real_world_testset':
         # Normalise mesh points to 0.5-0.5 for real world data
@@ -158,17 +125,20 @@ def test_plot(encoder, reshaper, mesh_decoder, batch, criterion, csvlog, epoch, 
 
     ## Get some initial point estimate for point transformer layers
     points = reshaper(latent)
+    
+    if args.reshaper_type == 'EMLP':
+        points_2d = points[:,:636]
+        points_2d = points_2d.view(-1,318,2)
+        points_1d = points[:,636:]
+        points_1d = points_1d.view(-1,318,1)
+        points_3d = torch.cat((points_2d,points_1d), dim=-1)
+        points = points_3d.view(-1,954)
 
     ## Mesh decoder
     mesh = mesh_decoder(points)
     mesh = mesh.view(mesh.shape[0], -1, 3)
 
-#     print(f'mesh_pts_gt shape : {mesh_pts_gt.shape}')
-#     print(f'mesh_tri_idx shape : {mesh_tri_idx.shape}')
-#     print(f'mesh shape : {mesh.shape}')
-    
     fig = plt.figure(figsize=plt.figaspect(0.2))
-    
     ax = fig.add_subplot(1, 2, 1, projection='3d')
     mesh_2d = np.squeeze(mesh_pts_gt)
     mesh_tri_idx = np.squeeze(mesh_tri_idx)
@@ -200,6 +170,7 @@ def main():
     parser = argparse.ArgumentParser(description='PathologyGAN trainer.')
     parser.add_argument('--device',          dest='device',          type=str,            default='cuda',           help='cuda or cpu.')
     parser.add_argument('--encoder',         dest='encoder',         type=str,            default='Conv', help='Type of encoder model - options: (1)Conv=Conv ResNet (2)EConv=E2 Equivariant Conv ResNet.')
+    parser.add_argument('--reshaper_type',   dest='reshaper_type',   type=str,            default='MLP', help='Type of reshaper model - options: (1)MLP (2)EMLP.')
     parser.add_argument('--decoder',         dest='decoder',         type=str,            default='MLP', help='Type of decoder model - options: (1)GNN=GATConv (2)MLP=MLP (3)EMLP=SO(3) Equivariant MLP.')
     parser.add_argument('--num_workers',     dest='num_workers',     type=int,            default=0,                help='Number of workers for the dataloader.')
     parser.add_argument('--batch_size',      dest='batch_size',      type=int,            default=8,                help='Batch size for dataloader.')
@@ -218,7 +189,6 @@ def main():
 
     if args.dataset == 'real_world_testset':
         dataset_train, dataset_val = torch.utils.data.random_split(dataset, [500, 83], generator=torch.Generator().manual_seed(0))
-#         dataset_train, dataset_val = torch.utils.data.random_split(dataset, [1, 582], generator=torch.Generator().manual_seed(0))
     elif args.dataset == 'synthetic_train_val':
         train_len = int(len(dataset) * 0.8) #40000
         dataset_train, dataset_val = torch.utils.data.random_split(dataset, [train_len, len(dataset)-train_len], generator=torch.Generator().manual_seed(0))
@@ -248,28 +218,42 @@ def main():
         encoder = E2Encoder()
         encoder = encoder.to(args.device)
         print(encoder)
+    elif args.encoder == 'EConvE':
+        encoder = E2EncoderE2()
+        encoder = encoder.to(args.device)
+        print(encoder)
 
     ## Pull out points from CNN latent space and reshape to be a hand point cloud.
-    reshaper = torch.nn.Sequential(
-#                     torch.nn.Linear(4096, 30528), # 954x32
-#                     torch.nn.Linear(4096, 15264), # 954x32
-                    torch.nn.Linear(4096, 954), # 954x32
-                    torch.nn.ReLU()
-                    )
-    reshaper = reshaper.to(args.device)
-    print(reshaper)
+    
+    if args.reshaper_type == 'MLP':
+        reshaper = torch.nn.Sequential(
+                        torch.nn.Linear(4096, 2862), # 954x32
+                        torch.nn.ReLU()
+                        )
+        reshaper = reshaper.to(args.device)
+        print(reshaper)
+    elif args.reshaper_type == 'EMLP':
+        repin= 256*V
+        repmid = 512*V
+        repout = 318*V + 318*Scalar
+        G = SO(2)
+
+
+        np.random.seed(42)
+        reshaper = emlpnn.EMLP(repin,repout,G,num_layers=2,ch=repmid)
+        reshaper = reshaper.to(args.device)
+        print(reshaper)
 
     if args.decoder == 'GNN':
         ## GNN
-        mesh_decoder = GATConvModel(16, edge_index)
+        mesh_decoder = GATConvModel(16, edge_index, in_features=3)
         mesh_decoder = mesh_decoder.to(args.device)
         print(mesh_decoder)
         
     elif args.decoder == 'MLP':
         ## Point estimator
         mesh_decoder = torch.nn.Sequential(
-#                         torch.nn.Linear(30528, 8000),
-                        torch.nn.Linear(15264, 8000),
+                        torch.nn.Linear(2862, 8000),
                         torch.nn.ReLU(),
                         torch.nn.Linear(8000, 2862) #954x3
                         )
@@ -277,21 +261,13 @@ def main():
         print(mesh_decoder)
         
     elif args.decoder == 'EMLP':
-        repin= 318*V # Setup some example data representations
+        repin= 318*V
         repmid = 318*V+10*V**2
         repout = 954*V
-        G = SO(3) # The lorentz group
+        G = SO(3)
         
+        np.random.seed(42)
         mesh_decoder = emlpnn.EMLP(repin,repout,G,num_layers=2,ch=repmid)
-#         mesh_decoder = EMLP(repin,repout,G,num_layers=3,ch=repmid)
-
-        ## Point estimator
-#         mesh_decoder = torch.nn.Sequential(
-# #                         torch.nn.Linear(30528, 8000),
-#                         torch.nn.Linear(15264, 8000),
-#                         torch.nn.ReLU(),
-#                         torch.nn.Linear(8000, 2862) #954x3
-#                         )
         mesh_decoder = mesh_decoder.to(args.device)
         print(mesh_decoder)
         
@@ -362,6 +338,14 @@ def main():
 
             ## Get some initial point estimate for point transformer layers
             points = reshaper(latent)
+            
+            if args.reshaper_type == 'EMLP':
+                points_2d = points[:,:636]
+                points_2d = points_2d.view(-1,318,2)
+                points_1d = points[:,636:]
+                points_1d = points_1d.view(-1,318,1)
+                points_3d = torch.cat((points_2d,points_1d), dim=-1)
+                points = points_3d.view(-1,954)
 
             ## Mesh decoder
             mesh = mesh_decoder(points)
