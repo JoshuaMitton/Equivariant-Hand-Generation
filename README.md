@@ -1,5 +1,8 @@
 # Equivariant-Hand-Generation
 
+## Paper
+https://arxiv.org/abs/2111.13023
+
 Run the model with something like this:
 
 ```
